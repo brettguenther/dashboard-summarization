@@ -97,6 +97,11 @@ resource "google_cloud_run_v2_service" "default" {
       }
 
       env {
+        name  = "THINKING_BUDGET"
+        value = tostring(var.thinking_budget)
+      }
+
+      env {
         name = "GENAI_CLIENT_SECRET"
         value_source {
           secret_key_ref {

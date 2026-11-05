@@ -19,7 +19,13 @@ variable "vertex_location" {
 variable "model_id" {
   type        = string
   description = "Gemini model ID on Vertex AI"
-  default     = "gemini-3.8-flash"
+  default     = "gemini-3.5-flash-lite"
+}
+
+variable "thinking_budget" {
+  type        = number
+  description = "Thinking budget for Vertex AI Gemini models (0 to disable thinking token latency)"
+  default     = 0
 }
 
 variable "docker_image" {

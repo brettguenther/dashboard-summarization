@@ -6,8 +6,17 @@ A Looker Extension Framework dashboard tile that synthesizes live dashboard quer
 
 ## Capabilities
 
-1. **Structured Executive Synthesis**: Runs every tile query under the active viewer's Looker permissions and dashboard filters, summarizes each tile in parallel, and synthesizes an executive brief with impact-tagged key findings and optional prioritized next steps.
-2. **Edit-Mode Tile Configuration & Auto-Run**: Entering Looker Dashboard Edit mode (`tileHostData.isDashboardEditing`) opens an integrated Tile Configuration Menu backed by Looker's `CustomerArtifactStore` (`artifact` / `update_artifacts`), allowing authors to configure Auto-Run on load, default persona/prompt instructions, viewer prompt refinement, and section visibility (`Recommended Next Steps` and `Suggested Follow-Up Questions`) for all viewers.
+1. **Fast Single-Pass & Deep Parallel Synthesis**:
+   - **Single-Pass Pipeline (Default &bull; ~3-4s)**: Calls `POST /generateExecutivePackage` to analyze all dashboard tiles in a single unified Vertex AI request. Synthesizes an executive overview, quantitative key findings, prioritized next steps, follow-up conversational questions, and individual tile breakdown cards in one fast round-trip.
+   - **Parallel Multi-Call Pipeline**: Map-reduce fan-out that summarizes every tile independently (`/generateQuerySummary`) before synthesizing the executive brief (`/generateSummary`). Selectable via the Tile Configuration Menu.
+   - **Gemini 3.5 Flash Lite**: Default model running on Vertex AI (`locations/global`) with explicit `thinkingBudget: 0` to eliminate thinking token latency while preserving strict data grounding.
+2. **Edit-Mode Tile Configuration & Auto-Run**: Entering Looker Dashboard Edit mode (`tileHostData.isDashboardEditing`) opens an integrated Tile Configuration Menu backed by Looker's `CustomerArtifactStore` (`artifact` / `update_artifacts`), allowing authors to configure:
+   - **Execution Pipeline**: Toggle between Fast Single-Pass (~3s) and Parallel Multi-Call.
+   - **Auto-Run**: Automatically generate insights on dashboard load.
+   - **Filter Change Behavior**: Toggle between instant auto-refresh or a 1-click "Refresh Brief" banner.
+   - **Viewer Permissions**: Enable or disable viewer prompt refinement (`Refine` button).
+   - **Section Visibility**: Show or hide `Recommended Next Steps` and `Suggested Follow-Up Questions`.
+   - **Default Prompt & Persona**: Choose from built-in personas (Executive, Analyst, Stakeholder, Action Plan) or provide tailored analytical instructions.
 3. **Space-Filling Fluid UI & Collaboration Exports**: Uses a slim single-line header (`title_hidden: true` compatible) and `@container` responsive wide-screen grids, alongside Looker Conversational Analytics follow-up prompts (`/agents/<LOOKER_AGENT_ID>`), one-click Markdown copy, Google Chat OAuth export, and Slack Block Kit OAuth export.
 
 ## Architecture
@@ -24,14 +33,14 @@ flowchart LR
   subgraph GCP["Google Cloud Project"]
     Run["Cloud Run REST Service<br/>(Node 22 + Express 5)"]
     Secret["Secret Manager<br/>(GENAI_CLIENT_SECRET)"]
-    Vertex["Vertex AI<br/>(@google/genai · gemini-3.8-flash)"]
+    Vertex["Vertex AI<br/>(@google/genai · gemini-3.5-flash-lite)"]
   end
 
   Tile -->|"1. Fetch metadata & run_inline_query"| CoreAPI
-  Tile -->|"2. serverProxy (/generateQuerySummary, /generateSummary)"| Proxy
+  Tile -->|"2. serverProxy (/generateExecutivePackage)"| Proxy
   Proxy -->|"3. Inject X-Genai-Client-Secret"| Run
   Secret -.->|"Mount secret"| Run
-  Run -->|"4. ADC generateContent (responseSchema)"| Vertex
+  Run -->|"4. ADC generateContent (responseSchema · thinkingBudget: 0)"| Vertex
   Tile -->|"5. Launch follow-up question"| CA
 ```
 
@@ -39,7 +48,7 @@ flowchart LR
 
 - **Frontend**: React 19, TypeScript 5.8, Vite 6 (single classic IIFE bundle with inlined CSS), `react-markdown` + `remark-gfm` + `rehype-sanitize`, `lucide-react`
 - **Looker Integration**: `@looker/extension-sdk` (`26.22.0`), `@looker/sdk` (`26.22.0`)
-- **Backend Service**: Node.js 22+, Express 5, `@google/genai` (`vertexai: true`), defaulting to `gemini-3.8-flash` (`GOOGLE_CLOUD_LOCATION=global`)
+- **Backend Service**: Node.js 22+, Express 5, `@google/genai` (`vertexai: true`), defaulting to `gemini-3.5-flash-lite` on `locations/global` with `THINKING_BUDGET=0`
 - **Infrastructure**: Cloud Run v2, Secret Manager, least-privilege IAM (`roles/aiplatform.user` + `roles/secretmanager.secretAccessor`) provisioned via Terraform
 
 ---
@@ -66,7 +75,8 @@ flowchart LR
    ```bash
    export GOOGLE_CLOUD_PROJECT="<PROJECT_ID>"
    export GOOGLE_CLOUD_LOCATION="global"
-   export MODEL_ID="gemini-3.8-flash"
+   export MODEL_ID="gemini-3.5-flash-lite"
+   export THINKING_BUDGET="0"
    export GENAI_CLIENT_SECRET="<SHARED_SECRET>"
    npm start
    ```
@@ -108,7 +118,8 @@ flowchart LR
      -var="project_id=<PROJECT_ID>" \
      -var="deployment_region=<REGION>" \
      -var="vertex_location=global" \
-     -var="model_id=gemini-3.8-flash" \
+     -var="model_id=gemini-3.5-flash-lite" \
+     -var="thinking_budget=0" \
      -var="docker_image=<REGION>-docker.pkg.dev/<PROJECT_ID>/dashboard-summarization-docker-repo/dashboard-summarization-service:latest" \
      -var="genai_client_secret_value=<SHARED_SECRET>"
    ```
