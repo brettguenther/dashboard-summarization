@@ -1,37 +1,44 @@
-import { DashboardMetadata } from '../types';
+import type { ExtensionSDK } from '@looker/extension-sdk';
+import type { DashboardMetadata, QueryWithData, TileSummaryCard } from '../types';
+import { callBackendService } from './backendClient';
+
+interface QuerySummaryResponse {
+  summary: string;
+  title?: string;
+}
 
 export const fetchQuerySummary = async (
-  queryResult: any,
+  queryResult: QueryWithData,
+  index: number,
   restfulService: string,
-  extensionSDK: any,
+  extensionSDK: Pick<ExtensionSDK, 'fetchProxy' | 'serverProxy' | 'createSecretKeyTag'>,
   dashboardMetadata: DashboardMetadata,
-  nextStepsInstructions: string,
-): Promise<any> => {
-  console.log('fetchquerysummary queryResult', queryResult);
+  nextStepsInstructions: string
+): Promise<TileSummaryCard | null> => {
   try {
-    
-    const response = await extensionSDK[restfulService === 'http://localhost:5000' ? 'fetchProxy' : 'serverProxy'](`${restfulService}/generateQuerySummary`, {
-      method: 'POST',
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
+    const data = await callBackendService<QuerySummaryResponse>(
+      '/generateQuerySummary',
+      {
         query: queryResult,
-        description: dashboardMetadata.description,
-        nextStepsInstructions: nextStepsInstructions,
-        client_secret: restfulService === 'http://localhost:5000' ? process.env.GENAI_CLIENT_SECRET : extensionSDK.createSecretKeyTag("genai_client_secret")
-      })
-    });
-    console.log('fetchquerysummary response', response);
-    if (response.ok) {
-      const data = await response.body.summary;
-      return data;
-    } else {
-      console.error('Error generating query summary:', response.statusText);
+        description: dashboardMetadata.description || '',
+        nextStepsInstructions,
+      },
+      extensionSDK,
+      restfulService
+    );
+
+    if (!data?.summary) {
       return null;
     }
+
+    return {
+      index,
+      title: queryResult.title || data.title || `Tile ${index + 1}`,
+      noteText: queryResult.note_text || undefined,
+      markdown: data.summary,
+    };
   } catch (error) {
-    console.error('Error generating query summary:', error);
+    console.error(`Error generating summary for tile "${queryResult.title}":`, error);
     return null;
   }
 };

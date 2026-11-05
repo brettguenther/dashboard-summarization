@@ -1,85 +1,128 @@
+import type React from 'react';
+import type { Filters } from '@looker/extension-sdk';
 
-import { Filters, QueryResponse } from '@looker/extension-sdk'
+export interface DashboardQuery {
+  fields: string[] | string;
+  dynamic_fields?: unknown;
+  view: string;
+  model: string;
+  filters?: Record<string, string>;
+  pivots?: string[] | null;
+  sorts?: string[] | null;
+  limit?: string | null;
+  column_limit?: string | null;
+  row_total?: string | null;
+  subtotals?: string[] | null;
+}
 
 export interface Query {
-    queryBody: {
-        fields: any;
-        dynamic_fields?: any;
-        view: any;
-        model: any;
-        filters?: any;
-        pivots?: any;
-        sorts?: any;
-        limit?: any;
-        column_limit?: any;
-        row_total?: any;
-        subtotals?: any;
-    };
-    note_text: string;
-    title: string;
+  queryBody: DashboardQuery;
+  note_text: string;
+  title: string;
 }
+
+export interface QueryWithData extends Query {
+  queryData: Array<Record<string, unknown>>;
+}
+
+export interface FilterListener {
+  field: string;
+  dashboard_filter_name: string;
+}
+
+export interface Filterable {
+  listen: FilterListener[];
+}
+
+export interface ResultMaker {
+  query?: DashboardQuery | null;
+  filterables?: Filterable[];
+}
+
+export interface DashboardElement {
+  query: DashboardQuery | null;
+  result_maker: ResultMaker | null;
+  note_text: string | null;
+  title: string | null;
+}
+
 export interface DashboardMetadata {
-    dashboardFilters: Filters | undefined,
-    dashboardId: string | undefined,
-    queries: Query[],
-    indexedFilters?: {
-        [key: string]: {
-            dimension: string,
-            explore: string,
-            model: string
-        }
-    },
-    description?: string | undefined
+  dashboardFilters: Filters | undefined;
+  dashboardId: string | undefined;
+  queries: Query[];
+  description?: string;
 }
 
-interface DashboardQuery {
-    fields: any;
-    dynamic_fields?: any;
-    view: any;
-    model: any;
-    filters?: any;
-    pivots?: any;
-    sorts?: any;
-    limit?: any;
-    column_limit?: any;
-    row_total?: any;
-    subtotals?: any;
-  }
-  
-  interface ResultMaker {
-    query: DashboardQuery;
-    filterables: any[];
-  }
-  
-  export interface DashboardElement {
-    query: DashboardQuery | null;
-    result_maker: ResultMaker | null;
-    note_text: string;
-    title: string;
-  }
+export interface ExecutiveHighlight {
+  headline: string;
+  detail: string;
+  impact: 'positive' | 'negative' | 'neutral';
+}
 
-export interface QuerySummary {
-  queryTitle: string;
-  description: string;
-  summary: string;
-  nextSteps: string[];
+export interface ExecutiveRecommendation {
+  action: string;
+  rationale: string;
+  priority: 'high' | 'medium';
+}
+
+export interface ExecutiveSummaryStructured {
+  executiveOverview: string;
+  keyHighlights: ExecutiveHighlight[];
+  recommendations: ExecutiveRecommendation[];
+}
+
+export interface TileSummaryCard {
+  index: number;
+  title: string;
+  noteText?: string;
+  markdown: string;
+}
+
+export interface QuerySuggestionItem {
+  querySuggestion: string;
+  rationale?: string;
+  category?: string;
+}
+
+export interface ToastNotice {
+  type: 'success' | 'error' | 'info';
+  text: string;
 }
 
 export interface SummaryDataContextType {
-    data: string[];
-    setData: React.Dispatch<React.SetStateAction<string[]>>;
-    formattedData: string;
-    setFormattedData: React.Dispatch<React.SetStateAction<string>>;
-    querySuggestions: string[];
-    setQuerySuggestions: React.Dispatch<React.SetStateAction<string[]>>;
-    info: boolean;
-    setInfo: React.Dispatch<React.SetStateAction<boolean>>;
-    message: string;
-    setMessage: React.Dispatch<React.SetStateAction<string>>;
-    dashboardURL: string;
-    setDashboardURL: React.Dispatch<React.SetStateAction<string>>;
-  }
+  tileSummaries: TileSummaryCard[];
+  setTileSummaries: React.Dispatch<React.SetStateAction<TileSummaryCard[]>>;
+  executiveMarkdown: string;
+  setExecutiveMarkdown: React.Dispatch<React.SetStateAction<string>>;
+  executiveStructured: ExecutiveSummaryStructured | null;
+  setExecutiveStructured: React.Dispatch<React.SetStateAction<ExecutiveSummaryStructured | null>>;
+  querySuggestions: QuerySuggestionItem[];
+  setQuerySuggestions: React.Dispatch<React.SetStateAction<QuerySuggestionItem[]>>;
+  toast: ToastNotice | null;
+  setToast: React.Dispatch<React.SetStateAction<ToastNotice | null>>;
+  dashboardURL: string;
+  setDashboardURL: React.Dispatch<React.SetStateAction<string>>;
+}
 
-  export interface LoadingStates {
-    [key: string]: boolean;
-  }
+export interface LoadingStates {
+  [key: string]: boolean;
+}
+
+export type PipelineMode = 'single_pass' | 'parallel';
+
+export interface TileConfiguration {
+  autoRun: boolean;
+  autoRefreshOnFilterChange: boolean;
+  allowPromptOverride: boolean;
+  pipelineMode: PipelineMode;
+  defaultPresetId: string | null;
+  defaultPrompt: string;
+  showNextSteps: boolean;
+  showFollowUpQuestions: boolean;
+}
+
+export interface SummarizationPipelineOptions {
+  showNextSteps: boolean;
+  showFollowUpQuestions: boolean;
+  pipelineMode?: PipelineMode;
+}

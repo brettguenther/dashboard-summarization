@@ -1,304 +1,253 @@
 # Looker Dashboard Summarization
 
-This is an extension or plugin for Looker that integrates LLM's hosted on Vertex AI into a streaming dashboard summarization experience powered by Websockets.
+A Looker Extension Framework dashboard tile that synthesizes live dashboard queries into structured executive briefs, tile-by-tile analytical breakdowns, and Looker Conversational Analytics follow-up prompts using Gemini on Vertex AI.
 
 ![dashboard-summary](./src/assets/dashboard-summary-new.gif)
 
-## Description
+## Capabilities
 
-The Dashboard Summarization extension can be broken down into 3 parts:
+1. **Structured Executive Synthesis**: Runs every tile query under the active viewer's Looker permissions and dashboard filters, summarizes each tile in parallel, and synthesizes an executive brief with impact-tagged key findings and optional prioritized next steps.
+2. **Edit-Mode Tile Configuration & Auto-Run**: Entering Looker Dashboard Edit mode (`tileHostData.isDashboardEditing`) opens an integrated Tile Configuration Menu backed by Looker's `CustomerArtifactStore` (`artifact` / `update_artifacts`), allowing authors to configure Auto-Run on load, default persona/prompt instructions, viewer prompt refinement, and section visibility (`Recommended Next Steps` and `Suggested Follow-Up Questions`) for all viewers.
+3. **Space-Filling Fluid UI & Collaboration Exports**: Uses a slim single-line header (`title_hidden: true` compatible) and `@container` responsive wide-screen grids, alongside Looker Conversational Analytics follow-up prompts (`/agents/<LOOKER_AGENT_ID>`), one-click Markdown copy, Google Chat OAuth export, and Slack Block Kit OAuth export.
 
- 1. **Summarization**
-	 - Generates concise summaries on your dashboard's data
- 2. **Prescription**
-	 - Grounded in your dashboard's data, it can prescribe operational actions and point out outliers
- 3. **Action**
-	 - Leveraging Looker's API, insights can be exported into the business tools your organization uses
+## Architecture
 
-Additionally, the extension provides:
+```mermaid
+flowchart LR
+  subgraph Looker["Looker Instance"]
+    Tile["Dashboard Summarization Tile<br/>(React 19 + Vite Single Bundle)"]
+    CoreAPI["Looker Core 4.0 API<br/>(User-Context Queries)"]
+    Proxy["Looker ExternalApiProxy<br/>(Scoped Secret Injection)"]
+    CA["Conversational Analytics<br/>(/agents/LOOKER_AGENT_ID)"]
+  end
 
- - Google Chat Export (*Oauth integration to export the summary to Google Chat*)
- - Slack Export (*Oauth integration to export the summary to Slack in rich text*)
- - Custom Summary Prompts (Ability to provide specific guidance for summary generation)
- - Summary Regeneration (Regenerate summaries with different styles or focuses)
- - Queries run with user context
+  subgraph GCP["Google Cloud Project"]
+    Run["Cloud Run REST Service<br/>(Node 22 + Express 5)"]
+    Secret["Secret Manager<br/>(GENAI_CLIENT_SECRET)"]
+    Vertex["Vertex AI<br/>(@google/genai · gemini-3.8-flash)"]
+  end
 
-
-### Technologies Used
-#### Frontend
-- [React](https://reactjs.org/)
-- [TypeScript](https://www.typescriptlang.org/)
-- [Webpack](https://webpack.js.org/)
-
-#### Looker
-- [Looker Extension SDK](https://github.com/looker-open-source/sdk-codegen/tree/main/packages/extension-sdk-react)
-- [Looker Query API](https://developers.looker.com/api/explorer/4.0/methods/Query)
-
-#### Backend API
-- [Google Cloud Platform](https://cloud.google.com/)
-- [Vertex AI](https://cloud.google.com/vertex-ai)
-- [Cloud Run](https://cloud.google.com/run?hl=en)
-
-#### Export API's
-- [Slack](https://api.slack.com/authentication/oauth-v2)
-- [GChat](https://developers.google.com/chat/api/guides/auth/users)
-- ---
-
-## Setup
-
-![simple-architecture](./src/assets/dashboard-summary-architecture.png)
-
-### 1. REST API Server
-
-This section describes how to set up the API server on Cloud Run powering the Generative AI integrations.
-
-#### Getting Started for Local Development
-
-1. Clone or download a copy of this repository to your development machine.
-
-   ```bash
-   # cd ~/ Optional. your user directory is usually a good place to git clone to.
-   git clone https://github.com/looker-open-source/dashboard-summarization.git
-   ```
-
-2. Navigate (`cd`) to the template directory on your system
-
-   ```bash
-   cd dashboard-summarization/restful-service/src
-   ```
-
-3. Install the dependencies with [NPM](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
-
-   ```bash
-   npm install
-   ```
-
-   > You may need to update your Node version or use a [Node version manager](https://github.com/nvm-sh/nvm) to change your Node version.
-
-4. Authenticate into gcloud
-
-   ```bash
-   gcloud auth login && gcloud auth application-default login
-   ```
-
-5. Set environment variables
-
-   ```bash
-   export PROJECT="<YOUR_PROJECT_ID>"
-   export GENAI_CLIENT_SECRET="<YOUR_SECRET_VALUE>"
-   ```
-
-
-6. Start the development server
-
-   ```bash
-   npm run start
-   ```
-	Your development server should be running at http://localhost:5000
-
-#### Deployment
-
-1. For deployment you will need to build the docker file and submit it to the [Artifact Registry](https://cloud.google.com/artifact-registry). You need to first create a repository. Update `location` to your deployment region, then run this command from root
-	```bash
-	gcloud artifacts repositories create dashboard-summarization-docker-repo  --repository-format=docker  --location=REGION
-	```
-
-2. Navigate to template directory
-	```bash
-	cd dashboard-summarization/restful-service/src
-	```
-
-3. Update cloudbuild.yaml
-	```
-	<YOUR_REGION> = Your deployment region
-   <YOUR_PROJECT_ID> = Your GCP project ID
-	```
-
-4. Build Docker File and Submit to Artifact Registry, replacing the `REGION` variable with your deployment region.
-*Skip this step if you already have a deployed image.* Please see the [official docs](https://cloud.google.com/build/docs/configuring-builds/create-basic-configuration) for creating the yaml file.
-	```bash
-	gcloud auth login && gcloud auth application-default login && gcloud builds submit --region=REGION --config cloudbuild.yaml
-	```
-	Save the returned docker image url. You can also get the docker image url from the Artifact Registry
-
-5. Navigate (`cd`) to the terraform directory on your system
-	```bash
-	cd .. && cd terraform
-	```
-6. Replace defaults in the `variables.tf` file for project, region, docker url and service name.
-	```
-	project_id=<GCP project ID>
-   deployment_region=<Your deployement region>
-   docker_image=<The docker image url from step 5>
-   genai_client_secret_value=<secret used to secure endpoints for public service>
-	```
-
-7. Deploy resources. [*Ensure Application Default Credentials for GCP for Exported in your Environment first.*](https://cloud.google.com/docs/authentication/provide-credentials-adc#google-idp)
-
-   ```terraform
-   terraform init
-
-   terraform plan
-
-   terraform apply
-   ```
-
-8. Save Deployed Cloud Run URL Endpoint
-
-#### Optional: Setup Log Sink to BQ for LLM Cost Estimation and Request Logging
-
-This extension will make a call to Vertex for each query in the dashboard and one final call to format all the summaries. Each request is logged with billable characters that can be used to 
-estimate and monitor costs. Please see [Google Cloud's docs](https://cloud.google.com/logging/docs/export/configure_export_v2#creating_sink) on setting up a log sink to BQ, using the below filter for Dashboard Summarization Logs (*change location and service name if those variables have been updated*):
-
-```
-resource.type = "cloud_run_revision"
-resource.labels.service_name = "dashboard-summarization-service"
-resource.labels.location = "us-central1"
- severity>=DEFAULT
-jsonPayload.component="dashboard-summarization-logs"
+  Tile -->|"1. Fetch metadata & run_inline_query"| CoreAPI
+  Tile -->|"2. serverProxy (/generateQuerySummary, /generateSummary)"| Proxy
+  Proxy -->|"3. Inject X-Genai-Client-Secret"| Run
+  Secret -.->|"Mount secret"| Run
+  Run -->|"4. ADC generateContent (responseSchema)"| Vertex
+  Tile -->|"5. Launch follow-up question"| CA
 ```
 
-### 2. Looker Extension Framework Setup
+### Technology Stack
 
-#### Getting Started for Local Development
-
-1. Clone or download a copy of this repository to your development machine (if you haven't already).
-
-   ```bash
-   # cd ~/ Optional. your user directory is usually a good place to git clone to.
-   git clone https://github.com/looker-open-source/dashboard-summarization.git
-   ```
-
-2. Navigate (`cd`) to the root directory in the cloned repo
-
-3. Ensure All the Appropriate Environment Variables are set. Copy .env.example file and save as .env
-*See Export Integration Steps below for Slack and Gchat Variables. These are optional, except RESTFUL_SERVICE & GENAI_CLIENT_SECRET*. To Note, the GenAI Client Secret will be used as an environment variable only in development. When you deploy the extension to production, you'll need to save it as a user attribute in Looker with a specific format. This is so that the secret is secured and not evaluated client side. More instructions on this in the `Deployment` instructions further down.
-```
-SLACK_CLIENT_ID=
-SLACK_CLIENT_SECRET=
-CHANNEL_ID=
-SPACE_ID=
-RESTFUL_SERVICE=<Required: Cloud run endpoint url>
-GENAI_CLIENT_SECRET=<same secret value used to secure Cloud Run service>
-```
-
-4. Install the dependencies with [NPM](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
-
-   ```bash
-   npm install
-   ```
-
-   > You may need to update your Node version or use a [Node version manager](https://github.com/nvm-sh/nvm) to change your Node version.
-   > If you get errors installing dependencies, you may try
-   ```bash
-   npm install --legacy-peer-deps
-   ```
-
-5. Start the development server
-
-   ```bash
-   npm run develop
-   ```
-
-   Great! Your extension is now running and serving the JavaScript at https://localhost:3000/dashboard_summarization.js.
-
-6. Now log in to Looker and create a new project.
-
-   This is found under **Develop** => **Manage LookML Projects** => **New LookML Project**.
-
-   You'll want to select "Blank Project" as your "Starting Point". You'll now have a new project with no files.
-
-   1. In your copy of the extension project you have a `manifest.lkml` file.
-
-   You can either drag & upload this file into your Looker project, or create a `manifest.lkml` with the same content. Change the `id`, `label`, or `url` as needed.
-
-  
-
-      project_name: "dashboard-summarization-extension"
-        
-        application: dashboard-summarization {
-          label: "Dashboard Insights Powered by Vertex AI"
-          # file: "dashboard_summarization.js"
-          url: "https://localhost:3000/dashboard_summarization.js"
-          mount_points: {
-            dashboard_vis: no
-            dashboard_tile: yes
-            standalone: no
-          }
-          entitlements: {
-            local_storage: yes
-            use_form_submit: yes
-            core_api_methods: ["run_inline_query","run_query","all_lookml_models","dashboard","dashboard_dashboard_elements"]
-            external_api_urls: [
-           "YOUR CLOUD RUN URL","http://localhost:5000","http://localhost:3000","https://*.googleapis.com","https://slack.com/api/*","https://slack.com/*"
-          ]
-            oauth2_urls: [
-              "https://accounts.google.com/o/oauth2/v2/auth",
-              "https://www.googleapis.com/auth/chat.spaces",
-              "https://www.googleapis.com/auth/drive.metadata.readonly",
-              "https://www.googleapis.com/auth/spreadsheets.readonly",
-              "https://www.googleapis.com/auth/userinfo.profile",
-              "https://www.googleapis.com/auth/chat.spaces.readonly",
-              "https://www.googleapis.com/auth/chat.bot",
-              "https://www.googleapis.com/auth/chat.messages",
-              "https://www.googleapis.com/auth/chat.messages.create",
-              "https://slack.com/oauth/v2/authorize"
-            ]
-            scoped_user_attributes:["genai_client_secret"]
-          }
-        }
-
-7. Create a `model` LookML file in your project. The name doesn't matter. The model and connection won't be used, and in the future this step may be eliminated.
-
-   - Add a connection in this model. It can be any connection, it doesn't matter which.
-   - [Configure the model you created](https://docs.looker.com/data-modeling/getting-started/create-projects#configuring_a_model) so that it has access to some connection.
-
-8. Connect your new project to Git. You can do this multiple ways:
-
-   - Create a new repository on GitHub or a similar service, and follow the instructions to [connect your project to Git](https://docs.looker.com/data-modeling/getting-started/setting-up-git-connection)
-   - A simpler but less powerful approach is to set up git with the "Bare" repository option which does not require connecting to an external Git Service.
-
-9. Commit your changes and deploy your them to production through the Project UI.
-
-10. Reload the page and click the `Browse` dropdown menu. You should see your extension in the list.
-   - The extension will load the JavaScript from the `url` provided in the `application` definition. By default, this is https://localhost:3000/dashboard_summarization.js. If you change the port your server runs on in the package.json, you will need to also update it in the manifest.lkml.
-
-- Refreshing the extension page will bring in any new code changes from the extension template, although some changes will hot reload.
-
-
-#### Deployment
-
-The process above requires your local development server to be running to load the extension code. To allow other people to use the extension, a production build of the extension needs to be run. As the kitchensink uses code splitting to reduce the size of the initially loaded bundle, multiple JavaScript files are generated.
-
-1. In your extension project directory on your development machine, build the extension by running the command `npm run build`.
-2. Drag and drop the generated JavaScript file(bundle.js) contained in the `dist` directory into the Looker project interface.
-3. Modify your `manifest.lkml` to use `file` instead of `url` and point it at the `dashboard_summarization.js` file.
-4. [IMPORTANT] Create a User Attribute in Looker following this naming convention `<extension_id>_genai_client_secret`. Note any dash or :: in the extension_id name will need to be replaced with an underscore. Typically the extension id will be your lookml project name where the extension lives followed by the name of the extension ie. `dashboard-summarization`. See [the docs](https://cloud.google.com/looker/docs/extension-framework-react-and-js-code-examples#user_attributes) for more details
-
-Note that the additional JavaScript files generated during the production build process do not have to be mentioned in the manifest. These files will be loaded dynamically by the extension as and when they are needed. Note that to utilize code splitting, the Looker server must be at version 7.21 or above.
-
-### 3. [Optional] Export Integration Setup
-
- #### Slack OAuth Setup 
- 1. Follow the official Slack developer docs to setup an [OAuth Application](https://api.slack.com/authentication/oauth-v2)
- 2. Acquire a `SLACK_CLIENT_ID`  and `SLACK_CLIENT_SECRET` from the OAuth app created in Step 1 and add them to the `.env` file.
- 3. Attach the appropriate [User & Bot Scopes](https://api.slack.com/scopes) (recommended to at least have `channels:read` and `channels:write`)
- 4. [Optional] if making Bot requests, add the bot to channels you want it accessing.
-
-> To note, the Slack integration hardcodes a specific channel id in the code. These can be modified or an additional API request made to provide a channel selector experience.
-
-#### Google Chat OAuth Setup
-1. Follow the official Google Chat developer docs to setup an [OAuth Application](https://developers.google.com/chat/api/guides/auth)
-2. Acquire a `GOOGLE_CLIENT_ID` from the OAuth app created in Step 1 and add them to the `.env` file.
-3. Configure a [Google Chat Bot](https://developers.google.com/chat/quickstart/gcf-app) to send messages (*this bot is only used for message ownership and not used to call the Google Chat API*)
-4. Add bot to specific Google Chat Spaces.
-
-> To note, the Google Chat Integration hardcodes a specific space id in the code. These can be modified or an additional API request made to provide a space selector experience.
+- **Frontend**: React 19, TypeScript 5.8, Vite 6 (single classic IIFE bundle with inlined CSS), `react-markdown` + `remark-gfm` + `rehype-sanitize`, `lucide-react`
+- **Looker Integration**: `@looker/extension-sdk` (`26.22.0`), `@looker/sdk` (`26.22.0`)
+- **Backend Service**: Node.js 22+, Express 5, `@google/genai` (`vertexai: true`), defaulting to `gemini-3.8-flash` (`GOOGLE_CLOUD_LOCATION=global`)
+- **Infrastructure**: Cloud Run v2, Secret Manager, least-privilege IAM (`roles/aiplatform.user` + `roles/secretmanager.secretAccessor`) provisioned via Terraform
 
 ---
 
-### Recommendations for fine tuning the model
+## 1. Cloud Run Vertex AI Service Setup
 
-This app uses a one shot prompt technique for fine tuning the LLM, meaning that all the metadata for the dashboard and request is contained in the prompt. To improve the accuracy, detail, and depth of the summaries and prescriptive steps returned by the LLM please pass as much context about the dashboard and the general recommendation themes in the prompt sent to the model. This can all be done through Looker as opposed to hard coded in the Cloud Run Service. Details below:
-* Add dashboard details to each dashboard the extension is added to. This is used to inform the LLM of the general context of the report (see [these docs](https://cloud.google.com/looker/docs/editing-user-defined-dashboards#editing_dashboard_details) for more detail).
-* Add notes to each tile on a dashboard. This is used to inform the LLM of the general context of each individual query on the dashboard. Use this to add small contextual notes the LLM should consider when generating the summary (see [these docs](https://cloud.google.com/looker/docs/editing-user-defined-dashboards#:~:text=Adding%20a%20tile%20note,use%20plain%20text%20or%20HTML.) for more details on adding tile notes).
+### Local Development
+
+1. Navigate to the backend service directory and install dependencies:
+
+   ```bash
+   cd restful-service/src
+   npm install
+   ```
+
+2. Authenticate Google Cloud Application Default Credentials:
+
+   ```bash
+   gcloud auth application-default login
+   ```
+
+3. Export required environment variables and start the server (listens on `http://127.0.0.1:5000` by default):
+
+   ```bash
+   export GOOGLE_CLOUD_PROJECT="<PROJECT_ID>"
+   export GOOGLE_CLOUD_LOCATION="global"
+   export MODEL_ID="gemini-3.8-flash"
+   export GENAI_CLIENT_SECRET="<SHARED_SECRET>"
+   npm start
+   ```
+
+4. Run backend unit tests:
+
+   ```bash
+   npm test
+   ```
+
+### Cloud Run Deployment (Artifact Registry + Terraform)
+
+1. Create an Artifact Registry Docker repository in your target region:
+
+   ```bash
+   gcloud artifacts repositories create dashboard-summarization-docker-repo \
+     --repository-format=docker \
+     --location="<REGION>" \
+     --project="<PROJECT_ID>"
+   ```
+
+2. Build and push the container image from `restful-service/src`:
+
+   ```bash
+   cd restful-service/src
+   gcloud builds submit \
+     --project="<PROJECT_ID>" \
+     --region="<REGION>" \
+     --config="../../src/assets/cloudbuild.yaml" \
+     --substitutions="_REGION=<REGION>"
+   ```
+
+3. Deploy the Cloud Run service, service account, and Secret Manager secret with Terraform:
+
+   ```bash
+   cd ../terraform
+   terraform init
+   terraform apply \
+     -var="project_id=<PROJECT_ID>" \
+     -var="deployment_region=<REGION>" \
+     -var="vertex_location=global" \
+     -var="model_id=gemini-3.8-flash" \
+     -var="docker_image=<REGION>-docker.pkg.dev/<PROJECT_ID>/dashboard-summarization-docker-repo/dashboard-summarization-service:latest" \
+     -var="genai_client_secret_value=<SHARED_SECRET>"
+   ```
+
+4. Record the `url` output returned by Terraform for configuring `.env` and `manifest.lkml`.
+
+> [!IMPORTANT]
+> **Looker (Google Cloud core) Custom Domain Requirement**: Looker Core tenant VPCs configure an authoritative Private Cloud DNS zone for `run.app.` (used internally for Looker services), causing Looker's `ExternalApiProxy` (`extensionSDK.serverProxy`) to return `404 Not Found` for default `*.run.app` URLs. Map a **custom public domain** to the Cloud Run service (for example via Cloud Run Domain Mappings pointing a `CNAME` to `ghs.googlehosted.com.`, or an External Application Load Balancer) and use that custom `https://...` domain in `RESTFUL_WEBSERVICE`, `manifest.lkml` (`external_api_urls`), and the Looker User Attribute **Domain Allowlist**.
+
+### Optional: Cloud Logging Sink for Token Usage Monitoring
+
+Each Vertex AI call writes a structured Cloud Logging entry (`component: "dashboard-summarization-logs"`) including `model` and `usageMetadata` token counts (`promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`). Filter logs in Cloud Logging or route them to BigQuery with:
+
+```text
+resource.type = "cloud_run_revision"
+resource.labels.service_name = "dashboard-summarization-service"
+jsonPayload.component = "dashboard-summarization-logs"
+```
+
+---
+
+## 2. Looker Extension Setup
+
+### Local Development
+
+1. From the repository root, copy `.env.example` to `.env` and populate configuration values:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   ```ini
+   RESTFUL_WEBSERVICE=http://127.0.0.1:5000
+   # Used only in local development; production builds strip this variable and use Looker's scoped secret tag
+   GENAI_CLIENT_SECRET=<SHARED_SECRET>
+
+   # Optional: Looker Conversational Analytics Agent ID (deep-links to https://<your-instance>.cloud.looker.com/agents/<AGENT_ID>)
+   LOOKER_AGENT_ID=
+
+   # Optional: Google Chat & Slack OAuth client IDs and target destinations
+   GOOGLE_CLIENT_ID=
+   SPACE_ID=
+   SLACK_CLIENT_ID=
+   CHANNEL_ID=
+   ```
+
+2. Install dependencies and start the HTTPS Vite dev server:
+
+   ```bash
+   npm install
+   npm run develop
+   ```
+
+   - Looker dev bundle endpoint: `https://localhost:3000/dashboard_summarization.js`
+   - Standalone local UI preview (outside Looker): `https://localhost:3000/?preview=1`
+
+3. Run typechecking and frontend unit tests:
+
+   ```bash
+   npm run typecheck
+   npm test
+   ```
+
+4. Create a blank LookML project in Looker, add `manifest.lkml`, and include your Cloud Run URL in `external_api_urls`:
+
+   ```lkml
+   project_name: "dashboard-summarization-extension"
+
+   application: dashboard-summarization {
+     label: "Dashboard Insights Powered by Vertex AI"
+     # file: "dashboard_summarization.js"
+     url: "https://localhost:3000/dashboard_summarization.js"
+     mount_points: {
+       dashboard_vis: no
+       dashboard_tile: yes
+       standalone: no
+     }
+     entitlements: {
+       local_storage: yes
+       use_form_submit: yes
+       use_clipboard: yes
+       new_window: yes
+       new_window_external_urls: ["https://*.looker.com/*", "https://slack.com/*"]
+       core_api_methods: ["me", "run_inline_query", "run_query", "all_lookml_models", "dashboard", "dashboard_dashboard_elements", "artifact", "update_artifacts"]
+       external_api_urls: [
+         "https://<YOUR_CLOUD_RUN_SERVICE_URL>",
+         "http://127.0.0.1:5000",
+         "http://localhost:5000",
+         "https://localhost:3000",
+         "https://*.googleapis.com",
+         "https://slack.com/api/*",
+         "https://slack.com/*"
+       ]
+       oauth2_urls: [
+         "https://accounts.google.com/o/oauth2/v2/auth",
+         "https://www.googleapis.com/auth/chat.spaces",
+         "https://www.googleapis.com/auth/userinfo.profile",
+         "https://www.googleapis.com/auth/chat.spaces.readonly",
+         "https://www.googleapis.com/auth/chat.bot",
+         "https://www.googleapis.com/auth/chat.messages",
+         "https://www.googleapis.com/auth/chat.messages.create",
+         "https://slack.com/oauth/v2/authorize"
+       ]
+       scoped_user_attributes: ["genai_client_secret"]
+     }
+   }
+   ```
+
+### Production Bundle Deployment
+
+1. Build the self-contained Looker bundle (with `RESTFUL_WEBSERVICE` set to your deployed Cloud Run URL in `.env`):
+
+   ```bash
+   npm run build
+   ```
+
+   This produces a single file (`dist/dashboard_summarization.js`) with all styles inlined.
+
+2. Upload `dist/dashboard_summarization.js` to your LookML project, switch `manifest.lkml` from `url:` to `file: "dashboard_summarization.js"`, and deploy to production.
+3. Create a hidden Looker User Attribute named `<extension_id>_genai_client_secret` (replacing `-` and `::` in the extension ID with `_`, e.g. `dashboard_summarization_extension_dashboard_summarization_genai_client_secret`), restrict its **Domain Allowlist** to `https://<YOUR_CUSTOM_CLOUD_RUN_DOMAIN>/*`, and set its default value to `<SHARED_SECRET>`. (If updating an existing hidden User Attribute's Domain Allowlist, clear `default_value` to `null` first, update `hidden_value_domain_whitelist`, and then re-apply `default_value`.)
+
+---
+
+## 3. Optional Collaboration Exports
+
+### Slack OAuth Setup
+
+1. Create a [Slack OAuth v2 application](https://api.slack.com/authentication/oauth-v2) with `chat:write` and `channels:read` scopes.
+2. Add `SLACK_CLIENT_ID` and `CHANNEL_ID` to the frontend `.env` before building.
+3. Configure `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` as environment variables (or Secret Manager references) on the Cloud Run service so `/slack/oauth-exchange` exchanges authorization codes server-side without exposing `SLACK_CLIENT_SECRET` in browser code.
+
+### Google Chat OAuth Setup
+
+1. Configure a Google Cloud OAuth 2.0 Web Client and enable the Google Chat API.
+2. Add `GOOGLE_CLIENT_ID` and target `SPACE_ID` to `.env`, and add the Chat app to your target space.
+
+---
+
+## Grounding Recommendations
+
+- **Dashboard Descriptions**: Populate the dashboard's **Details -> Description** field in Looker to give Gemini overarching business context and KPI definitions.
+- **Tile Notes**: Add concise notes on individual dashboard tiles to clarify metric nuances, targets, or caveats that Gemini should incorporate into tile and executive summaries.

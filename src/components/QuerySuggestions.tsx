@@ -1,68 +1,110 @@
-import React, { useContext } from "react"
-import styled from "styled-components"
-import { SummaryDataContext } from '../contexts/SummaryDataContext'
-import { ExtensionContext } from "@looker/extension-sdk-react"
+import React, { useContext, useState } from 'react';
+import { Check, Copy, ExternalLink, MessageSquarePlus } from 'lucide-react';
+import { appConfig } from '../config';
+import { useExtensionHost } from '../contexts/ExtensionHostContext';
+import { SummaryDataContext } from '../contexts/SummaryDataContext';
+import type { QuerySuggestionItem } from '../types';
 
-const BoxContainer = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 20px 0;
-  max-height: 220px;
-`
+export const QuerySuggestions: React.FC = () => {
+  const { extensionSDK, lookerHostData, isPreviewMode } = useExtensionHost();
+  const summaryCtx = useContext(SummaryDataContext);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-const QueryBox = styled.a`
-  display: inline-block;
-  padding: 10px 20px;
-  background-color: #007bff;
-  color: white;
-  text-decoration: none;
-  border-radius: 5px;
-  flex-shrink: 1;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  transition: background-color 0.3s ease;
-  width: 100%;
-  height: auto;
-  &:hover {
-    background-color: #0056b3;
+  if (!summaryCtx || summaryCtx.querySuggestions.length === 0) {
+    return null;
   }
-`
-// Here is the format of the querySuggestions string:
-// ---------
-// '''json
-// [
-//     {"querySuggestion": "Show me the top XXX entries for YYY"},
-//     {"querySuggestion": "What are the higest and lowest values for ZZZ, grouped by AAAA?"},
-//     ...
-// ]
-// '''
-interface ParsedQuerySuggestion {
-    querySuggestion: string
-    }
-interface ParsedQuerySuggestions extends Array<ParsedQuerySuggestion> {}
 
-export const QuerySuggestions: React.FC = (explore) => {
-  const { querySuggestions } = useContext(SummaryDataContext) as any
-  const { lookerHostData } = useContext(ExtensionContext) as any
-  if (!querySuggestions || querySuggestions.length === 0) return null
-  // Replace ''' and '''json with empty strings and also ```json and ``` with empty strings
-  const cleanedQuerySuggestions = querySuggestions.body.suggestions.replace(/'''json|'''/g, '').replace(/```json|```/g, '')
-  // Parse the cleaned string as JSON
-  const parsedQuerySuggestions: ParsedQuerySuggestions = JSON.parse(cleanedQuerySuggestions)
-  const modelName = lookerHostData.extensionId.split('::')[0]
-  const explore_assistant_url = `${lookerHostData.hostOrigin}/extensions/${modelName}::explore_assistant/index?explore=${explore}&queryPrompt=`
+  const { querySuggestions, setToast } = summaryCtx;
+  const hostOrigin = lookerHostData?.hostOrigin || lookerHostData?.hostUrl || '';
+  const agentId = appConfig.LOOKER_AGENT_ID.trim();
+  const agentUrl = agentId
+    ? isPreviewMode && hostOrigin
+      ? `${hostOrigin.replace(/\/+$/, '')}/agents/${encodeURIComponent(agentId)}`
+      : `/agents/${encodeURIComponent(agentId)}`
+    : '';
+
+  const copyPrompt = async (prompt: string, index: number) => {
+    try {
+      await extensionSDK.clipboardWrite(prompt);
+    } catch {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(prompt);
+      }
+    }
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex((prev) => (prev === index ? null : prev)), 2000);
+  };
+
+  const handleOpenConversationalAnalytics = async (
+    item: QuerySuggestionItem,
+    index: number
+  ) => {
+    await copyPrompt(item.querySuggestion, index);
+    if (agentUrl) {
+      extensionSDK.openBrowserWindow(agentUrl, '_blank');
+      setToast({
+        type: 'info',
+        text: 'Copied question to clipboard and opened Looker Conversational Analytics.',
+      });
+    } else {
+      setToast({
+        type: 'success',
+        text: 'Copied follow-up question to clipboard for Conversational Analytics.',
+      });
+    }
+  };
+
   return (
-    <BoxContainer>
-      {parsedQuerySuggestions.map((suggestion: ParsedQuerySuggestion, index: number) => (
-        <QueryBox
-          key={index}
-          href={`${explore_assistant_url}${encodeURIComponent(suggestion.querySuggestion)}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {suggestion.querySuggestion}
-        </QueryBox>
-      ))}
-    </BoxContainer>
-  )
-}
+    <section className="ds-suggestions-section" aria-label="Follow-up analytical questions">
+      <div className="ds-section-header">
+        <div className="ds-section-title-group">
+          <MessageSquarePlus size={16} className="ds-accent-icon" />
+          <h3>Suggested Follow-Up Questions</h3>
+        </div>
+        <span className="ds-section-subtitle">
+          {agentUrl
+            ? 'Click to copy & launch in Conversational Analytics'
+            : 'Click any question to copy for Conversational Analytics'}
+        </span>
+      </div>
+
+      <div className="ds-suggestions-grid">
+        {querySuggestions.map((item, idx) => {
+          const isCopied = copiedIndex === idx;
+          return (
+            <button
+              key={`${idx}-${item.querySuggestion.slice(0, 24)}`}
+              type="button"
+              className="ds-suggestion-card"
+              onClick={() => handleOpenConversationalAnalytics(item, idx)}
+            >
+              <div className="ds-suggestion-top">
+                {item.category && <span className="ds-badge ds-badge-neutral">{item.category}</span>}
+                <span className="ds-suggestion-action">
+                  {isCopied ? (
+                    <>
+                      <Check size={13} />
+                      <span>Copied</span>
+                    </>
+                  ) : agentUrl ? (
+                    <>
+                      <ExternalLink size={13} />
+                      <span>Ask Agent</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={13} />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </span>
+              </div>
+              <p className="ds-suggestion-prompt">{item.querySuggestion}</p>
+              {item.rationale && <p className="ds-suggestion-rationale">{item.rationale}</p>}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+};

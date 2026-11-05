@@ -1,26 +1,41 @@
 variable "project_id" {
-  type = string
-  default = "YOUR_PROJECT_ID"
+  type        = string
+  description = "Google Cloud Project ID"
+  default     = "YOUR_PROJECT_ID"
 }
 
 variable "deployment_region" {
-  type = string
-  default = "YOUR_REGION"
+  type        = string
+  description = "Cloud Run deployment region (e.g. us-central1)"
+  default     = "us-central1"
+}
+
+variable "vertex_location" {
+  type        = string
+  description = "Vertex AI endpoint location (global recommended for latest Gemini models)"
+  default     = "global"
+}
+
+variable "model_id" {
+  type        = string
+  description = "Gemini model ID on Vertex AI"
+  default     = "gemini-3.8-flash"
 }
 
 variable "docker_image" {
-    type = string
-    default = "YOUR_DOCKER_IMAGE_URL"
+  type        = string
+  description = "Artifact Registry container image URI"
+  default     = "YOUR_DOCKER_IMAGE_URL"
 }
 
 variable "cloud_run_service_name" {
-    type = string
-    default = "dashboard-summary-service"
+  type        = string
+  description = "Cloud Run service name"
+  default     = "dashboard-summary-service"
 }
 
 variable "genai_client_secret_value" {
-  description = "The value for the GENAI_CLIENT_SECRET"
+  description = "Shared secret verified against Looker scoped user attribute genai_client_secret"
   type        = string
   sensitive   = true
-  default = "YOUR VALUE"
 }

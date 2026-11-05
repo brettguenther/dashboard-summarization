@@ -1,42 +1,67 @@
-import { look, Looker40SDK } from "@looker/sdk";
+import type { ExtensionSDK } from '@looker/extension-sdk';
+import type { QuerySuggestionItem } from '../types';
+import { callBackendService } from './backendClient';
+
+interface QuerySuggestionsResponse {
+  suggestions: QuerySuggestionItem[] | string;
+}
+
+export function normalizeQuerySuggestions(raw: unknown): QuerySuggestionItem[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item): QuerySuggestionItem | null => {
+        if (typeof item === 'string') {
+          return { querySuggestion: item };
+        }
+        if (item && typeof item === 'object' && 'querySuggestion' in item) {
+          const typed = item as Record<string, unknown>;
+          return {
+            querySuggestion: String(typed.querySuggestion || '').trim(),
+            rationale: typed.rationale ? String(typed.rationale) : undefined,
+            category: typed.category ? String(typed.category) : undefined,
+          };
+        }
+        return null;
+      })
+      .filter((item): item is QuerySuggestionItem => Boolean(item?.querySuggestion));
+  }
+
+  if (typeof raw === 'string' && raw.trim()) {
+    const cleaned = raw
+      .replace(/'''json|'''/g, '')
+      .replace(/```json|```/g, '')
+      .trim();
+    try {
+      return normalizeQuerySuggestions(JSON.parse(cleaned));
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
 
 export const generateQuerySuggestions = async (
-  querySummaries: any[],
+  querySummaries: string[],
   restfulService: string,
-  extensionSDK: any,
-  setQuerySuggestions: (suggestions: any) => void,
+  extensionSDK: Pick<ExtensionSDK, 'fetchProxy' | 'serverProxy' | 'createSecretKeyTag'>,
   nextStepsInstructions: string
-): Promise<void> => {
-  try {
-    // Use the extension sdk to proxy the request to the RESTful service
-    const response = await extensionSDK[restfulService === 'http://localhost:5000' ? 'fetchProxy' : 'serverProxy'](`${restfulService}/generateQuerySuggestions`, {
-      method: 'POST',
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        queryResults: querySummaries,
-        querySummaries,
-        nextStepsInstructions: nextStepsInstructions,
-        client_secret: restfulService === 'http://localhost:5000' ? process.env.GENAI_CLIENT_SECRET : extensionSDK.createSecretKeyTag("genai_client_secret")
-      })
-    });
+): Promise<QuerySuggestionItem[]> => {
+  if (querySummaries.length === 0) return [];
 
-    if (response.ok) {
-      console.log('Query suggestions response:', response);
-     
-      try {
-        const data = await response.json();
-        console.log("Suggestions: ", data)
-        setQuerySuggestions(data.suggestions);
-      } catch (error) {
-        // If parsing fails, assume it's Markdown
-        setQuerySuggestions(response);
-      }
-    } else {
-      console.error('Error generating query suggestions:', response.statusText);
-    }
+  try {
+    const data = await callBackendService<QuerySuggestionsResponse>(
+      '/generateQuerySuggestions',
+      {
+        querySummaries,
+        nextStepsInstructions,
+      },
+      extensionSDK,
+      restfulService
+    );
+    return normalizeQuerySuggestions(data?.suggestions);
   } catch (error) {
     console.error('Error generating query suggestions:', error);
+    return [];
   }
 };

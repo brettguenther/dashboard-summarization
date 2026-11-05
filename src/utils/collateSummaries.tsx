@@ -1,83 +1,170 @@
-import { Query, DashboardMetadata, QuerySummary, LoadingStates } from '../types';
+import type React from 'react';
+import type { ExtensionSDK } from '@looker/extension-sdk';
+import type {
+  DashboardMetadata,
+  ExecutiveSummaryStructured,
+  LoadingStates,
+  QuerySuggestionItem,
+  QueryWithData,
+  SummarizationPipelineOptions,
+  TileSummaryCard,
+} from '../types';
 import { fetchQuerySummary } from './fetchQuerySummary';
+import { generateExecutivePackage } from './generateExecutivePackage';
+import { generateFinalSummary } from './generateFinalSummary';
+import { generateQuerySuggestions } from './generateQuerySuggestions';
+
+export interface CollatePipelineCallbacks {
+  setTileSummaries: React.Dispatch<React.SetStateAction<TileSummaryCard[]>>;
+  setExecutiveMarkdown: React.Dispatch<React.SetStateAction<string>>;
+  setExecutiveStructured: React.Dispatch<React.SetStateAction<ExecutiveSummaryStructured | null>>;
+  setQuerySuggestions: React.Dispatch<React.SetStateAction<QuerySuggestionItem[]>>;
+  setLoadingStates: React.Dispatch<React.SetStateAction<LoadingStates>>;
+  setSynthesizingExecutive: React.Dispatch<React.SetStateAction<boolean>>;
+}
 
 export const collateSummaries = async (
-  queryResults: any[],
+  queryResults: QueryWithData[],
   nextStepsInstructions: string,
   restfulService: string,
-  extensionSDK: any,
+  extensionSDK: Pick<
+    ExtensionSDK,
+    'fetchProxy' | 'serverProxy' | 'createSecretKeyTag' | 'rendered'
+  >,
   dashboardMetadata: DashboardMetadata,
-  setQuerySummaries: (summaries: QuerySummary[]) => void,
-  setLoadingStates: React.Dispatch<React.SetStateAction<LoadingStates>>
-): Promise<QuerySummary[]> => {
+  callbacks: CollatePipelineCallbacks,
+  options: SummarizationPipelineOptions = {
+    showNextSteps: true,
+    showFollowUpQuestions: true,
+    pipelineMode: 'single_pass',
+  }
+): Promise<TileSummaryCard[]> => {
   if (!queryResults || queryResults.length === 0) {
-    console.error('No query results to collate');
     return [];
   }
 
-  // Initialize loading states for each query
-  const initialLoadingStates: LoadingStates = queryResults.reduce((acc, _, index) => {
-    acc[`query-${index}`] = true;
-    return acc;
-  }, {} as LoadingStates);
-  setLoadingStates(initialLoadingStates);
+  const initialLoadingStates: LoadingStates = {};
+  queryResults.forEach((_, index) => {
+    initialLoadingStates[`query-${index}`] = true;
+  });
+  callbacks.setLoadingStates(initialLoadingStates);
+  callbacks.setSynthesizingExecutive(true);
 
-  // Create an array to store all summaries
-  const allSummaries: QuerySummary[] = [];
+  // Fast Single-Pass Mode (Default): Sends all tile data in 1 unified request (~3s total)
+  if (options.pipelineMode !== 'parallel') {
+    try {
+      const packageResult = await generateExecutivePackage(
+        queryResults,
+        nextStepsInstructions,
+        restfulService,
+        extensionSDK,
+        dashboardMetadata,
+        {
+          includeNextSteps: options.showNextSteps,
+          includeSuggestions: options.showFollowUpQuestions,
+          thinkingBudget: 0,
+        }
+      );
 
-  try {
-    // Create an array of promises but don't wait for all
-    const summaryPromises = queryResults.map(async (queryResult, index) => {
+      const clearedLoadingStates: LoadingStates = {};
+      queryResults.forEach((_, index) => {
+        clearedLoadingStates[`query-${index}`] = false;
+      });
+      callbacks.setLoadingStates(clearedLoadingStates);
+      callbacks.setSynthesizingExecutive(false);
+
+      if (packageResult) {
+        callbacks.setTileSummaries(packageResult.tileSummaries);
+        callbacks.setExecutiveMarkdown(packageResult.summary);
+        callbacks.setExecutiveStructured(packageResult.structured);
+        callbacks.setQuerySuggestions(
+          options.showFollowUpQuestions ? packageResult.suggestions : []
+        );
+        extensionSDK.rendered?.();
+        return packageResult.tileSummaries;
+      }
+      return [];
+    } catch (err) {
+      console.error('Failed in single-pass executive summarization:', err);
+      const clearedLoadingStates: LoadingStates = {};
+      queryResults.forEach((_, index) => {
+        clearedLoadingStates[`query-${index}`] = false;
+      });
+      callbacks.setLoadingStates(clearedLoadingStates);
+      callbacks.setSynthesizingExecutive(false);
+      return [];
+    }
+  }
+
+  // Parallel Mode: Multi-call fan-out summarizing each tile independently before executive collation
+  const slots: Array<TileSummaryCard | null> = new Array(queryResults.length).fill(null);
+
+  const settled = await Promise.allSettled(
+    queryResults.map(async (queryResult, index) => {
       try {
-        const querySummary = await fetchQuerySummary(
-          queryResult, 
-          restfulService, 
-          extensionSDK, 
+        const card = await fetchQuerySummary(
+          queryResult,
+          index,
+          restfulService,
+          extensionSDK,
           dashboardMetadata,
           nextStepsInstructions
         );
-
-        if (querySummary) {
-          // Update the allSummaries array and notify the component
-          allSummaries[index] = querySummary;
-          setQuerySummaries([...allSummaries].filter(Boolean));
-
-          // Update loading state for this query
-          setLoadingStates((prev: LoadingStates) => ({
-            ...prev,
-            [`query-${index}`]: false
-          }));
-
-          return querySummary;
+        if (card) {
+          slots[index] = card;
+          callbacks.setTileSummaries(slots.filter((c): c is TileSummaryCard => c !== null));
         }
-        throw new Error(`Failed to generate summary for query ${index}`);
-      } catch (error) {
-        console.error(`Error processing query ${index}:`, error);
-        // Update loading state even on error
-        setLoadingStates((prev: LoadingStates) => ({
+        return card;
+      } finally {
+        callbacks.setLoadingStates((prev) => ({
           ...prev,
-          [`query-${index}`]: false
+          [`query-${index}`]: false,
         }));
-        return null;
       }
-    });
+    })
+  );
 
-    // Use Promise.all instead of Promise.allSettled for older TypeScript versions
-    // Filter out failed promises manually
-    const results = await Promise.all(
-      summaryPromises.map(p => p.catch(error => {
-        console.error('Summary generation error:', error);
-        return null;
-      }))
-    );
+  const completedCards = settled
+    .map((res) => (res.status === 'fulfilled' ? res.value : null))
+    .filter((card): card is TileSummaryCard => card !== null);
 
-    const completedSummaries = results.filter((result): result is QuerySummary => 
-      result !== null
-    );
+  if (completedCards.length > 0) {
+    const markdownList = completedCards.map((c) => c.markdown);
+    const [execResult, suggestions] = await Promise.all([
+      generateFinalSummary(
+        markdownList,
+        restfulService,
+        extensionSDK,
+        nextStepsInstructions,
+        dashboardMetadata.description,
+        options.showNextSteps
+      ),
+      options.showFollowUpQuestions
+        ? generateQuerySuggestions(
+            markdownList,
+            restfulService,
+            extensionSDK,
+            nextStepsInstructions
+          )
+        : Promise.resolve([]),
+    ]);
 
-    return completedSummaries;
-  } catch (error) {
-    console.error('Error in collateSummaries:', error);
-    return allSummaries.filter(Boolean);
+    if (execResult) {
+      callbacks.setExecutiveMarkdown(execResult.summary);
+      const normalizedStructured = execResult.structured
+        ? {
+            ...execResult.structured,
+            recommendations: options.showNextSteps
+              ? execResult.structured.recommendations
+              : [],
+          }
+        : null;
+      callbacks.setExecutiveStructured(normalizedStructured);
+    }
+    callbacks.setQuerySuggestions(options.showFollowUpQuestions ? suggestions : []);
   }
+
+  callbacks.setSynthesizingExecutive(false);
+  extensionSDK.rendered?.();
+  return completedCards;
 };

@@ -1,193 +1,197 @@
-/*
+import { useCallback, useContext } from 'react';
+import { appConfig } from '../config';
+import { useExtensionHost } from '../contexts/ExtensionHostContext';
+import { SummaryDataContext } from '../contexts/SummaryDataContext';
+import type { ExecutiveSummaryStructured, TileSummaryCard } from '../types';
+import { callBackendService } from '../utils/backendClient';
 
-MIT License
+export function buildSlackBlocks(
+  executiveStructured: ExecutiveSummaryStructured | null,
+  executiveMarkdown: string,
+  tileSummaries: TileSummaryCard[],
+  dashboardUrl: string,
+  showNextSteps = true
+): Array<Record<string, unknown>> {
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: 'Looker Dashboard Insights (Vertex AI)',
+        emoji: true,
+      },
+    },
+  ];
 
-Copyright (c) 2023 Looker Data Sciences, Inc.
+  if (dashboardUrl) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: '*Executive Summary* generated from live Looker dashboard queries.',
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Open in Looker', emoji: true },
+        url: dashboardUrl,
+        action_id: 'open-looker-dashboard',
+      },
+    });
+  }
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+  if (executiveStructured) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: executiveStructured.executiveOverview.slice(0, 2900),
+      },
+    });
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+    if (executiveStructured.keyHighlights.length > 0) {
+      const highlightsText = executiveStructured.keyHighlights
+        .map((h) => `• *${h.headline}*: ${h.detail}`)
+        .join('\n')
+        .slice(0, 2900);
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Key Findings*\n${highlightsText}`,
+        },
+      });
+    }
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+    if (showNextSteps && executiveStructured.recommendations.length > 0) {
+      const recsText = executiveStructured.recommendations
+        .map((r) => `• *[${r.priority.toUpperCase()}] ${r.action}* — ${r.rationale}`)
+        .join('\n')
+        .slice(0, 2900);
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Recommended Next Steps*\n${recsText}`,
+        },
+      });
+    }
+  } else if (executiveMarkdown) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: executiveMarkdown.slice(0, 2900),
+      },
+    });
+  } else {
+    for (const tile of tileSummaries.slice(0, 6)) {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*${tile.title}*\n${tile.markdown.slice(0, 2800)}`,
+        },
+      });
+    }
+  }
 
-*/
-
-import { useContext } from 'react'
-import { ExtensionContext } from '@looker/extension-sdk-react'
-import { SummaryDataContext } from '../contexts/SummaryDataContext'
+  return blocks;
+}
 
 const useSlackOauth = () => {
-    const { extensionSDK } = useContext(ExtensionContext)
-    const { formattedData, setInfo, setMessage, dashboardURL } = useContext(SummaryDataContext)
+  const { extensionSDK, lookerHostData, tileHostData } = useExtensionHost();
+  const summaryCtx = useContext(SummaryDataContext);
 
-    async function slackOauthImplicitFlow(){
-        try {
+  return useCallback(async () => {
+    if (!summaryCtx) return;
+    const {
+      executiveStructured,
+      executiveMarkdown,
+      tileSummaries,
+      dashboardURL,
+      setToast,
+    } = summaryCtx;
 
-            const response = await extensionSDK.oauth2Authenticate(
-                `https://slack.com/oauth/v2/authorize`,
-                {
-                    client_id: process.env.SLACK_CLIENT_ID!,
-                    scope: 'chat:write,channels:read',
-                    // user_scope:'chat:write,channels:read',
-                    response_type: 'code',
-                    state:'some random state'
-                },
-                'GET'
-                )
-         
-            const codeExchangeResponse = await extensionSDK.oauth2ExchangeCodeForToken(
-                'https://slack.com/api/oauth.v2.access',
-                {
-                    client_id: process.env.SLACK_CLIENT_ID!,
-                    code: response.code,
-                    client_secret: process.env.SLACK_CLIENT_SECRET!
-                }
-            )
-            
-            publishMessage(codeExchangeResponse.access_token)
-        } catch (e) {
-            console.log("Error: ",e)
-        }
+    if (!appConfig.SLACK_CLIENT_ID || !appConfig.CHANNEL_ID) {
+      setToast({
+        type: 'info',
+        text: 'Configure SLACK_CLIENT_ID and CHANNEL_ID in .env (and SLACK_CLIENT_SECRET on Cloud Run) to enable Slack export.',
+      });
+      return;
     }
 
-    function slackRichTextFormatter(querySummaries: any) {
-        const blocks: any[] = [];
+    try {
+      const oauthState =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-        blocks.push({
-			type: "section",
-			text: {
-				type: "mrkdwn",
-				text: "Summarized Dashboard in Looker",
-			},
-			accessory: {
-				type: "button",
-				text: {
-					type: "plain_text",
-					text: "Open",
-					emoji: true,
-				},
-				value: dashboardURL,
-				url: dashboardURL,
-				action_id: "button-action",
-			}
-		});
+      const authResp = await extensionSDK.oauth2Authenticate(
+        'https://slack.com/oauth/v2/authorize',
+        {
+          client_id: appConfig.SLACK_CLIENT_ID,
+          scope: 'chat:write,channels:read',
+          response_type: 'code',
+          state: oauthState,
+        },
+        'GET'
+      );
 
-        (typeof(querySummaries) === 'string' ? JSON.parse(querySummaries) : querySummaries).forEach((query) => {
-            Object.entries(query).forEach((value) => {
-                console.log(value)
-                switch(value[0]){
-                    case 'query_name':
-                        blocks.push({
-                            type: 'header',
-                            text: {
-                                type: 'plain_text',
-                                text: value[1],
-                                emoji: true
-                            }
-                        })
-                        break;
-                    case 'description':
-                        blocks.push({
-                            type: 'section',
-                            text: {
-                                type: 'plain_text',
-                                text: value[1],
-                                emoji: true
-                            }
-                        })
-                        break;
-                    case 'summary':
-                        blocks.push({
-                            type: 'section',
-                            text: {
-                                type: 'mrkdwn',
-                                text: `>${value[1]}`
-                            }
-                        })
-                        break;
-                    case 'next_steps':
-                        blocks.push({
-                            type: 'rich_text',
-                            elements: [{
-                                type:'rich_text_list',
-                                style: "bullet",
-                                elements: value[1].map((step) => {
-                                    return {
-                                        type: "rich_text_section",
-                                        elements: [
-                                            {
-                                                type: 'text',
-                                                text: step
-                                            }
-                                        ]
-                                    }
-                                })
-                            }]
-                        })
-                        break;
-                }
-            })
-        })
+      // Exchange authorization code server-side on Cloud Run so SLACK_CLIENT_SECRET never touches client code.
+      const tokenResp = await callBackendService<{ access_token: string }>(
+        '/slack/oauth-exchange',
+        { code: authResp.code },
+        extensionSDK,
+        appConfig.RESTFUL_WEBSERVICE
+      );
 
-        return blocks
+      const resolvedUrl =
+        dashboardURL ||
+        (lookerHostData?.hostUrl && tileHostData.dashboardId
+          ? `${lookerHostData.hostUrl}/dashboards/${encodeURIComponent(tileHostData.dashboardId)}`
+          : '');
+
+      const blocks = buildSlackBlocks(
+        executiveStructured,
+        executiveMarkdown,
+        tileSummaries,
+        resolvedUrl
+      );
+
+      const postBody = new URLSearchParams({
+        channel: appConfig.CHANNEL_ID,
+        token: tokenResp.access_token,
+        text: 'Looker Dashboard Insights Summary',
+        blocks: JSON.stringify(blocks),
+      }).toString();
+
+      const postResp = await extensionSDK.fetchProxy('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: postBody,
+      });
+
+      if (postResp.ok && postResp.body?.ok !== false) {
+        setToast({
+          type: 'success',
+          text: `Summary delivered to Slack channel ${appConfig.CHANNEL_ID}.`,
+        });
+      } else {
+        setToast({
+          type: 'error',
+          text: 'Slack API rejected message delivery.',
+        });
+      }
+    } catch (error) {
+      console.error('Slack export error:', error);
+      summaryCtx.setToast({
+        type: 'error',
+        text: 'Summary failed to deliver to Slack.',
+      });
     }
-
-    // Post a message to a channel your app is in using ID and message text
-    async function publishMessage(accessToken: string) {
-        console.log(formattedData)
-        console.log(formattedData[0])
-        try {
-            // Call the chat.postMessage method using the built-in WebClient
-            const details = {
-                'channel': process.env.CHANNEL_ID!,
-                'token': accessToken,
-                'blocks': JSON.stringify(slackRichTextFormatter(formattedData.trim()))
-            }
-            var formBody = [];
-            for (var property in details) {
-                var encodedKey = encodeURIComponent(property);
-                var encodedValue = encodeURIComponent(details[property]);
-                formBody.push(encodedKey + "=" + encodedValue);
-            }
-            formBody = formBody.join("&");
-            const result = await fetch('https://slack.com/api/chat.postMessage',
-                {
-                    method:'POST',
-                    headers: {
-                        // using this content type for a CORS workaround with the Slack Web API
-                        // Authorization: `Bearer ${accessToken}`,
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body:formBody
-                }
-            )
-            setInfo(true)
-            setMessage(`Summary Delivered to Slack channel: ${process.env.CHANNEL_ID} `)
-        }
-        catch (error) {
-            setInfo(true)
-            setMessage('Summary failed to deliver to Slack. See console for error.')
-            console.error(error);
-        }
-    }
-
-    
-
-    return () => {
-        slackOauthImplicitFlow()
-    }
-}
+  }, [extensionSDK, lookerHostData, summaryCtx, tileHostData.dashboardId]);
+};
 
 export default useSlackOauth;

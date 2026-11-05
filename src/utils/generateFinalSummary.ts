@@ -1,35 +1,40 @@
+import type { ExtensionSDK } from '@looker/extension-sdk';
+import type { ExecutiveSummaryStructured } from '../types';
+import { callBackendService } from './backendClient';
+
+export interface FinalSummaryResponse {
+  summary: string;
+  structured?: ExecutiveSummaryStructured | null;
+}
 
 export const generateFinalSummary = async (
-    querySummaries: any[],
-    restfulService: string,
-    extensionSDK: any,
-    setFormattedData: (data: any) => void,
-    nextStepsInstructions: string,
-  
-  ): Promise<void> => {
-    try {
-      const response = await extensionSDK[restfulService === 'http://localhost:5000' ? 'fetchProxy' : 'serverProxy'](`${restfulService}/generateSummary`, {
-        method: 'POST',
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          querySummaries,
-          nextStepsInstructions: nextStepsInstructions,
-          client_secret: restfulService === 'http://localhost:5000' ? process.env.GENAI_CLIENT_SECRET : extensionSDK.createSecretKeyTag("genai_client_secret")
-        })
-      });
-  
-      if (response.ok) {
-        console.log('generateFinalSummary request querySummaries and instructions', querySummaries, nextStepsInstructions);
-        console.log('generateFinalSummary response', response);
-        const data = await response.body;
-        setFormattedData(data.summary);
-      } else {
-        console.error('Error generating summary:', response.statusText);
-      }
-    } catch (error) {
-      console.error('Error generating summary:', error);
-    }
-  };
-  
+  querySummaries: string[],
+  restfulService: string,
+  extensionSDK: Pick<ExtensionSDK, 'fetchProxy' | 'serverProxy' | 'createSecretKeyTag'>,
+  nextStepsInstructions: string,
+  description?: string,
+  includeNextSteps = true
+): Promise<FinalSummaryResponse | null> => {
+  if (querySummaries.length === 0) return null;
+
+  try {
+    const data = await callBackendService<FinalSummaryResponse>(
+      '/generateSummary',
+      {
+        querySummaries,
+        nextStepsInstructions,
+        description: description || '',
+        includeNextSteps,
+      },
+      extensionSDK,
+      restfulService
+    );
+    return {
+      summary: data.summary || '',
+      structured: data.structured ?? null,
+    };
+  } catch (error) {
+    console.error('Error generating executive summary:', error);
+    return null;
+  }
+};
