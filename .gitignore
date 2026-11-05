@@ -10,3 +10,5 @@ restful-service/terraform/.terraform.lock.hcl
 restful-service/terraform/terraform.tfstate
 restful-service/terraform/terraform.tfstate.backup
 *.ini
+*.webm
+*.mp4
