@@ -14,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@looker/embed-sdk": "^2.0.10",
     "@looker/extension-sdk": "^26.22.0",
     "@looker/sdk": "^26.22.0",
     "@looker/sdk-rtl": "^21.6.7",

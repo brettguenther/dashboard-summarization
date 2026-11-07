@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { DashboardSummarization } from './components/DashboardSummarization';
+import { StandaloneWorkspace } from './components/StandaloneWorkspace';
 import {
   LookerExtensionProvider,
+  useExtensionHost,
   type ExtensionHostContextValue,
 } from './contexts/ExtensionHostContext';
 import { SummaryDataContext } from './contexts/SummaryDataContext';
@@ -13,6 +15,11 @@ import type {
   ToastNotice,
 } from './types';
 import './index.css';
+
+const ExtensionMountRouter: React.FC = () => {
+  const { isStandaloneMount } = useExtensionHost();
+  return isStandaloneMount ? <StandaloneWorkspace /> : <DashboardSummarization />;
+};
 
 export const App: React.FC<{ hostOverride?: ExtensionHostContextValue }> = ({
   hostOverride,
@@ -43,7 +50,7 @@ export const App: React.FC<{ hostOverride?: ExtensionHostContextValue }> = ({
   return (
     <LookerExtensionProvider overrideValue={hostOverride}>
       <SummaryDataContext.Provider value={contextValue}>
-        <DashboardSummarization />
+        <ExtensionMountRouter />
       </SummaryDataContext.Provider>
     </LookerExtensionProvider>
   );

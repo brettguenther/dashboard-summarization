@@ -126,3 +126,20 @@ export interface SummarizationPipelineOptions {
   showFollowUpQuestions: boolean;
   pipelineMode?: PipelineMode;
 }
+
+export type DrawerWidthMode = 'standard' | 'wide';
+
+export interface StandaloneWorkspaceConfig {
+  defaultDashboardId: string;
+  defaultDashboardTitle?: string;
+  defaultDrawerOpen: boolean;
+  drawerWidth: DrawerWidthMode;
+  tileConfig: TileConfiguration;
+}
+
+export interface LookerDashboardOption {
+  id: string;
+  title: string;
+  folderName?: string;
+}
+

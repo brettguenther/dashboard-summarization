@@ -71,7 +71,13 @@ function stripRedundantTileHeading(markdown: string, tileTitle: string): string 
   return markdown;
 }
 
-export const DashboardSummarization: React.FC = () => {
+export interface DashboardSummarizationProps {
+  tileConfigOverride?: TileConfiguration;
+}
+
+export const DashboardSummarization: React.FC<DashboardSummarizationProps> = ({
+  tileConfigOverride,
+}) => {
   const {
     extensionSDK,
     tileHostData,
@@ -80,6 +86,7 @@ export const DashboardSummarization: React.FC = () => {
     isPreviewMode,
     isPreviewEditMode,
     setIsPreviewEditMode,
+    setPreviewMountPoint,
   } = useExtensionHost();
   const {
     dashboardFilters,
@@ -164,8 +171,23 @@ export const DashboardSummarization: React.FC = () => {
     prevIsEditingRef.current = editingNow;
   }, [isDashboardEditing]);
 
-  // Load persisted TileConfiguration from Looker CustomerArtifactStore (with localStorage fallback).
+  // Load persisted TileConfiguration from Looker CustomerArtifactStore (with localStorage fallback),
+  // or sync from tileConfigOverride when mounted inside StandaloneWorkspace.
   useEffect(() => {
+    if (tileConfigOverride) {
+      setTileConfig((prev) =>
+        JSON.stringify(prev) === JSON.stringify(tileConfigOverride)
+          ? prev
+          : tileConfigOverride
+      );
+      if (!hasUserEditedPromptRef.current) {
+        setNextStepsInstructions(tileConfigOverride.defaultPrompt);
+        setSelectedPreset(tileConfigOverride.defaultPresetId);
+      }
+      setTileConfigLoaded(true);
+      return;
+    }
+
     if (!dashboardId || dashboardId === 'undefined') return;
     let cancelled = false;
     setTileConfigLoaded(false);
@@ -191,7 +213,7 @@ export const DashboardSummarization: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [core40SDK, dashboardId, elementId, extensionSDK, isPreviewMode]);
+  }, [core40SDK, dashboardId, elementId, extensionSDK, isPreviewMode, tileConfigOverride]);
 
   const filtersKey = useMemo(
     () => serializeDashboardFilters(dashboardFilters),
@@ -576,7 +598,19 @@ export const DashboardSummarization: React.FC = () => {
         </div>
 
         <div className="ds-slim-actions">
-          {isPreviewMode && setIsPreviewEditMode && (
+          {isPreviewMode && setPreviewMountPoint && !tileConfigOverride && (
+            <button
+              type="button"
+              className="ds-btn ds-btn-ghost ds-btn-xs"
+              onClick={() => setPreviewMountPoint('standalone')}
+              title="Preview Standalone Split-Workspace Layout"
+            >
+              <LayoutGrid size={13} />
+              <span>Standalone View</span>
+            </button>
+          )}
+
+          {isPreviewMode && setIsPreviewEditMode && !tileConfigOverride && (
             <button
               type="button"
               className={`ds-btn ds-btn-xs ${

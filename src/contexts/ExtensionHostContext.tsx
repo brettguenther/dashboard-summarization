@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   connectExtensionHost,
   LookerExtensionSDK,
@@ -36,6 +44,11 @@ export interface ExtensionHostContextValue {
   isPreviewMode: boolean;
   isPreviewEditMode?: boolean;
   setIsPreviewEditMode?: (editing: boolean) => void;
+  isStandaloneMount?: boolean;
+  previewMountPoint?: 'tile' | 'standalone';
+  setPreviewMountPoint?: (mount: 'tile' | 'standalone') => void;
+  extensionRoute?: string;
+  updateExtensionRoute?: (route: string) => void;
   connectionError: string | null;
 }
 
@@ -61,16 +74,23 @@ interface PreviewArtifactEntry {
 function buildLocalPreviewMocks(
   previewFilters: Filters,
   artifactStore: Map<string, PreviewArtifactEntry>,
+  contextDataRef: React.MutableRefObject<unknown>,
   isPreviewEditMode: boolean,
-  setIsPreviewEditMode: (editing: boolean) => void
+  setIsPreviewEditMode: (editing: boolean) => void,
+  previewMountPoint: 'tile' | 'standalone',
+  setPreviewMountPoint: (mount: 'tile' | 'standalone') => void,
+  extensionRoute: string,
+  updateExtensionRoute: (route: string) => void
 ): Omit<ExtensionHostContextValue, 'connectionError'> {
   const storage = new Map<string, string>();
+  const isStandalone = previewMountPoint === 'standalone';
   const lookerHostData: LookerHostData = {
     extensionId: 'dashboard-summarization::dashboard-summarization',
     lookerVersion: '26.20.0',
     hostUrl: 'https://looker.example.com',
     hostOrigin: 'https://looker.example.com',
-    mountPoint: MountPoint.dashboardTile,
+    route: extensionRoute,
+    mountPoint: isStandalone ? MountPoint.standalone : MountPoint.dashboardTile,
     extensionDashboardTileEnabled: true,
   };
 
@@ -116,6 +136,20 @@ function buildLocalPreviewMocks(
     openBrowserWindow: (url: string, target = '_blank') => {
       window.open(url, target, 'noopener,noreferrer');
     },
+    clientRouteChanged: (route: string) => {
+      updateExtensionRoute(route);
+    },
+    updateTitle: (title: string) => {
+      if (typeof document !== 'undefined') {
+        document.title = title;
+      }
+    },
+    getContextData: () => contextDataRef.current,
+    saveContextData: async (data: unknown) => {
+      contextDataRef.current = data;
+      return data;
+    },
+    refreshContextData: async () => contextDataRef.current,
     fetchProxy: proxyFetch,
     serverProxy: proxyFetch,
     oauth2Authenticate: async () => {
@@ -152,7 +186,8 @@ function buildLocalPreviewMocks(
     },
     {
       title: 'Acquisition Pipeline & Conversion by Channel',
-      note_text: 'Tracks qualified pipeline to closed-won conversion across paid and organic channels.',
+      note_text:
+        'Tracks qualified pipeline to closed-won conversion across paid and organic channels.',
       query: {
         model: 'enterprise_sales',
         view: 'marketing_attribution',
@@ -280,16 +315,23 @@ function buildLocalPreviewMocks(
   return {
     extensionSDK: mockExtensionSDK,
     core40SDK: mockCore40SDK,
-    tileHostData: {
-      dashboardId: 'preview_exec_pulse',
-      elementId: 'preview_tile_1',
-      isDashboardEditing: isPreviewEditMode,
-      dashboardFilters: previewFilters,
-    },
+    tileHostData: isStandalone
+      ? {}
+      : {
+          dashboardId: 'preview_exec_pulse',
+          elementId: 'preview_tile_1',
+          isDashboardEditing: isPreviewEditMode,
+          dashboardFilters: previewFilters,
+        },
     lookerHostData,
     isPreviewMode: true,
     isPreviewEditMode,
     setIsPreviewEditMode,
+    isStandaloneMount: isStandalone,
+    previewMountPoint,
+    setPreviewMountPoint,
+    extensionRoute,
+    updateExtensionRoute,
   };
 }
 
@@ -310,16 +352,46 @@ export const LookerExtensionProvider: React.FC<{
     return params.get('edit') === '1' || params.get('edit') === 'true';
   }, []);
 
+  const initialPreviewMount = useMemo<'tile' | 'standalone'>(() => {
+    if (typeof window === 'undefined') return 'tile';
+    const params = new URLSearchParams(window.location.search);
+    return params.get('mount') === 'standalone' ? 'standalone' : 'tile';
+  }, []);
+
+  const initialPreviewRoute = useMemo(() => {
+    if (typeof window === 'undefined') return '/';
+    return `${window.location.pathname}${window.location.search}`;
+  }, []);
+
   const [hostApi, setHostApi] = useState<ExtensionHostApi | null>(null);
   const [core40SDK, setCore40SDK] = useState<Looker40SDK | null>(null);
   const [tileHostData, setTileHostData] = useState<TileHostData>({});
+  const [extensionRoute, setExtensionRoute] = useState<string>(initialPreviewRoute);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isPreviewEditMode, setIsPreviewEditMode] = useState<boolean>(initialPreviewEdit);
+  const [previewMountPoint, setPreviewMountPoint] = useState<'tile' | 'standalone'>(
+    initialPreviewMount
+  );
   const previewArtifactStoreRef = useRef<Map<string, PreviewArtifactEntry>>(new Map());
+  const previewContextDataRef = useRef<unknown>(undefined);
   const [previewFilters] = useState<Filters>({
     Timeframe: 'Last 90 Days',
     Segment: 'All Segments',
   });
+
+  const updateExtensionRoute = useCallback(
+    (nextRoute: string) => {
+      setExtensionRoute(nextRoute);
+      if (hostApi && typeof hostApi.clientRouteChanged === 'function') {
+        try {
+          hostApi.clientRouteChanged(nextRoute);
+        } catch {
+          // Non-fatal if navigation entitlement is absent
+        }
+      }
+    },
+    [hostApi]
+  );
 
   useEffect(() => {
     if (overrideValue || isStandalonePreview) return;
@@ -327,6 +399,16 @@ export const LookerExtensionProvider: React.FC<{
     let cancelled = false;
     connectExtensionHost({
       chattyTimeout: 300000,
+      setInitialRoute: (route) => {
+        if (!cancelled && route) {
+          setExtensionRoute(route);
+        }
+      },
+      hostChangedRoute: (route) => {
+        if (!cancelled && route) {
+          setExtensionRoute(route);
+        }
+      },
       tileHostDataChangedCallback: (updatedData) => {
         if (!cancelled) {
           setTileHostData((prev) => {
@@ -341,6 +423,9 @@ export const LookerExtensionProvider: React.FC<{
         const sdk = LookerExtensionSDK.createClient(connectedHost);
         setHostApi(connectedHost);
         setCore40SDK(sdk);
+        if (connectedHost.lookerHostData?.route) {
+          setExtensionRoute(connectedHost.lookerHostData.route);
+        }
         if (connectedHost.tileSDK?.tileHostData) {
           const initialTileData = connectedHost.tileSDK.tileHostData;
           setTileHostData((prev) => {
@@ -370,12 +455,24 @@ export const LookerExtensionProvider: React.FC<{
       ...buildLocalPreviewMocks(
         previewFilters,
         previewArtifactStoreRef.current,
+        previewContextDataRef,
         isPreviewEditMode,
-        setIsPreviewEditMode
+        setIsPreviewEditMode,
+        previewMountPoint,
+        setPreviewMountPoint,
+        extensionRoute,
+        updateExtensionRoute
       ),
       connectionError: null,
     };
-  }, [isStandalonePreview, previewFilters, isPreviewEditMode]);
+  }, [
+    extensionRoute,
+    isPreviewEditMode,
+    isStandalonePreview,
+    previewFilters,
+    previewMountPoint,
+    updateExtensionRoute,
+  ]);
 
   if (overrideValue) {
     return (
@@ -417,6 +514,14 @@ export const LookerExtensionProvider: React.FC<{
     );
   }
 
+  const hostMountPoint = hostApi.lookerHostData?.mountPoint;
+  const isStandaloneMount =
+    hostMountPoint === MountPoint.standalone ||
+    (!tileHostData.dashboardId &&
+      hostMountPoint !== MountPoint.dashboardTile &&
+      hostMountPoint !== MountPoint.dashboardTilePopup &&
+      hostMountPoint !== MountPoint.dashboardVisualization);
+
   return (
     <ExtensionHostContext.Provider
       value={{
@@ -425,6 +530,9 @@ export const LookerExtensionProvider: React.FC<{
         tileHostData,
         lookerHostData: hostApi.lookerHostData,
         isPreviewMode: false,
+        isStandaloneMount,
+        extensionRoute,
+        updateExtensionRoute,
         connectionError: null,
       }}
     >

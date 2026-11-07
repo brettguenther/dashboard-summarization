@@ -11,7 +11,10 @@ application: dashboard-summarization {
   }
   entitlements: {
     local_storage: yes
+    navigation: yes
     use_clipboard: yes
+    use_embeds: yes
+    use_iframes: yes
     new_window: yes
     new_window_external_urls: [
       "https://*.looker.com/*",
@@ -25,6 +28,8 @@ application: dashboard-summarization {
       "all_lookml_models",
       "dashboard",
       "dashboard_dashboard_elements",
+      "all_dashboards",
+      "search_dashboards",
       "artifact",
       "update_artifacts"
     ]

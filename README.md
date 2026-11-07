@@ -17,7 +17,10 @@ A Looker Extension Framework dashboard tile that synthesizes live dashboard quer
    - **Viewer Permissions**: Enable or disable viewer prompt refinement (`Refine` button).
    - **Section Visibility**: Show or hide `Recommended Next Steps` and `Suggested Follow-Up Questions`.
    - **Default Prompt & Persona**: Choose from built-in personas (Executive, Analyst, Stakeholder, Action Plan) or provide tailored analytical instructions.
-3. **Space-Filling Fluid UI & Collaboration Exports**: Uses a slim single-line header (`title_hidden: true` compatible) and `@container` responsive wide-screen grids, alongside Looker Conversational Analytics follow-up prompts (`/agents/<LOOKER_AGENT_ID>`), one-click Markdown copy, Google Chat OAuth export, and Slack Block Kit OAuth export.
+3. **Dual Mount Modes — Embedded Dashboard Tile & Standalone Split-Workspace**:
+   - **Dashboard Tile Mount (`dashboard_tile: yes`)**: Runs directly inside any Looker dashboard with a slim single-line header (`title_hidden: true` compatible) and `@container` responsive wide-screen grids.
+   - **Standalone Split-Workspace Mount (`standalone: yes`)**: Launches as a full-screen Looker application (`/extensions/...`) that embeds any Looker dashboard on the main left canvas via `@looker/embed-sdk` (`getEmbedSDK()`) alongside a collapsible right-hand **AI Dashboard Insights Drawer** (`500px` Standard / `660px` Wide / `44px` Collapsed Rail). Includes a **Workspace Settings** modal with live dashboard search (`search_dashboards` / `all_dashboards`), URL route synchronization (`/dashboards/<id>?dashboard_id=<id>&<Filter>=<Value>` modeled after `lkrdev/dashboard-tabs`), and real-time filter/run event syncing (`dashboard:loaded`, `dashboard:filters:changed`, `dashboard:run:start`, `page:changed`).
+4. **Collaboration Exports & Conversational Analytics**: Supports Looker Conversational Analytics follow-up prompts (`/agents/<LOOKER_AGENT_ID>`), one-click Markdown copy, Google Chat OAuth export, and Slack Block Kit OAuth export.
 
 ## Architecture
 
@@ -47,7 +50,7 @@ flowchart LR
 ### Technology Stack
 
 - **Frontend**: React 19, TypeScript 5.8, Vite 6 (single classic IIFE bundle with inlined CSS), `react-markdown` + `remark-gfm` + `rehype-sanitize`, `lucide-react`
-- **Looker Integration**: `@looker/extension-sdk` (`26.22.0`), `@looker/sdk` (`26.22.0`)
+- **Looker Integration**: `@looker/extension-sdk` (`26.22.0`), `@looker/sdk` (`26.22.0`), `@looker/embed-sdk` (`2.0.10`)
 - **Backend Service**: Node.js 22+, Express 5, `@google/genai` (`vertexai: true`), defaulting to `gemini-3.5-flash-lite` on `locations/global` with `THINKING_BUDGET=0`
 - **Infrastructure**: Cloud Run v2, Secret Manager, least-privilege IAM (`roles/aiplatform.user` + `roles/secretmanager.secretAccessor`) provisioned via Terraform
 
@@ -174,7 +177,8 @@ jsonPayload.component = "dashboard-summarization-logs"
    ```
 
    - Looker dev bundle endpoint: `https://localhost:3000/dashboard_summarization.js`
-   - Standalone local UI preview (outside Looker): `https://localhost:3000/?preview=1`
+   - Local UI preview (Dashboard Tile mode): `https://localhost:3000/?preview=1`
+   - Local UI preview (Standalone Split-Workspace mode): `https://localhost:3000/?preview=1&mount=standalone`
 
 3. Run typechecking and frontend unit tests:
 
@@ -195,15 +199,18 @@ jsonPayload.component = "dashboard-summarization-logs"
      mount_points: {
        dashboard_vis: no
        dashboard_tile: yes
-       standalone: no
+       standalone: yes
      }
      entitlements: {
        local_storage: yes
+       navigation: yes
+       use_embeds: yes
+       use_iframes: yes
        use_form_submit: yes
        use_clipboard: yes
        new_window: yes
        new_window_external_urls: ["https://*.looker.com/*", "https://slack.com/*"]
-       core_api_methods: ["me", "run_inline_query", "run_query", "all_lookml_models", "dashboard", "dashboard_dashboard_elements", "artifact", "update_artifacts"]
+       core_api_methods: ["me", "run_inline_query", "run_query", "all_lookml_models", "dashboard", "dashboard_dashboard_elements", "all_dashboards", "search_dashboards", "artifact", "update_artifacts"]
        external_api_urls: [
          "https://<YOUR_CLOUD_RUN_SERVICE_URL>",
          "http://127.0.0.1:5000",
@@ -227,6 +234,24 @@ jsonPayload.component = "dashboard-summarization-logs"
      }
    }
    ```
+
+### LookML Manifest Entitlements Reference
+
+Each entitlement in `manifest.lkml` is scoped to a specific capability across the Dashboard Tile and Standalone Split-Workspace mount points:
+
+| Manifest Setting / Entitlement | Why It Is Used |
+| :--- | :--- |
+| `mount_points.dashboard_tile: yes` | Allows the extension to be added directly as a tile inside any Looker dashboard. |
+| `mount_points.standalone: yes` | Allows the extension to be launched from **Applications** (`/extensions/...`) in Standalone Split-Workspace mode (embedded Looker dashboard on the left + collapsible AI Insights drawer on the right). |
+| `use_embeds: yes` & `use_iframes: yes` | Required by `@looker/embed-sdk` (`getEmbedSDK()`) in Standalone mode to embed the selected Looker dashboard (`/embed/dashboards/<id>`) inside the left-hand workspace canvas and receive live `dashboard:loaded`, `dashboard:filters:changed`, `dashboard:run:start`, and `page:changed` events. |
+| `navigation: yes` | Enables URL route synchronization (`extensionSDK.clientRouteChanged` / `setInitialRoute` / `hostChangedRoute`) in Standalone mode so the active dashboard ID and filter state are reflected in the browser URL (`/dashboards/<id>?dashboard_id=<id>&...`) for bookmarking and sharing. |
+| `core_api_methods: ["dashboard", "dashboard_dashboard_elements", "run_inline_query", "run_query"]` | Fetches dashboard metadata, tile queries, and filter listeners, and executes each tile's underlying Looker query in the viewer's security context. |
+| `core_api_methods: ["all_dashboards", "search_dashboards"]` | Powers the searchable dashboard picker in the Standalone Workspace Settings modal so users can search and switch between available Looker dashboards by title or ID. |
+| `core_api_methods: ["artifact", "update_artifacts"]` | Persists per-tile configuration (`tile_<dashboardId>_<elementId>`) and default Standalone Workspace preferences (`standalone_workspace_config`) in Looker's `CustomerArtifactStore` (`namespace: "dashboard_summarization_config"`). |
+| `local_storage: yes` | Provides client-side fallback persistence for tile and standalone workspace settings when `CustomerArtifactStore` permissions are restricted. |
+| `use_clipboard: yes` | Enables one-click copying of the Executive Brief, individual tile summaries, and Conversational Analytics follow-up prompts. |
+| `new_window: yes` & `new_window_external_urls` | Allows opening the native Looker dashboard or Looker Conversational Analytics (`/agents/<LOOKER_AGENT_ID>`) in a new browser tab. |
+| `scoped_user_attributes: ["genai_client_secret"]` | Injects the shared `X-Genai-Client-Secret` header server-side via `extensionSDK.serverProxy` when calling the Cloud Run Vertex AI service without exposing secrets in browser code. |
 
 ### Production Bundle Deployment
 
